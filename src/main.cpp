@@ -1,61 +1,79 @@
-// Incluir las librerías necesarias 
-#include <Adafruit_Sensor.h>
-#include "DHT.h"
-#include "Arduino.h"
+/*
+ * PROYECTO: ESTACIÓN METEOROLÓGICA (FÍSICA - SIN PANTALLA OLED)
+ * Salida: Únicamente por Monitor Serial
+ * Componentes: ESP32, DHT11, BH1750, MQ-135
+*/
 
-// --- Configuración del Sensor ---
+// 1. LIBRERÍAS
+#include <Wire.h>    // Para I2C (BH1750)
+#include "DHT.h"     // Para Temp/Humedad
+#include <BH1750.h>  // Librería real para el sensor físico
 
-// Define el pin donde conectaste el sensor DATA
-// Tu documento especifica GPIO 4 
+// 2. DEFINICIONES GLOBALES DE PINES Y OBJETOS
+
+// --- DHT11 (Temp/Humedad) ---
 #define DHTPIN 4
+#define DHTTYPE DHT11   // <-- CAMBIO AQUÍ (Antes era DHT22)
+DHT dht(DHTPIN, DHTTYPE); 
 
-// Define el tipo de sensor que estás usando
-// En tu caso, DHT11 [cite: 11, 36]
-#define DHTTYPE DHT11
+// --- BH1750 (Luminosidad) ---
+BH1750 lightMeter; 
 
-// Inicializar el objeto 'dht' con el pin y el tipo
-DHT dht(DHTPIN, DHTTYPE);
+// --- MQ-135 (Calidad del Aire) ---
+const int MQ135_PIN = 36; // Pin analógico (VP)
 
-// --- Fin de la Configuración ---
-
-
+// 3. SETUP: Se ejecuta una vez al inicio
 void setup() {
-  // Inicia la comunicación serial para ver los resultados en el monitor [cite: 49]
-  // 115200 es una velocidad estándar para ESP32
   Serial.begin(115200); 
-  Serial.println("Prueba del sensor DHT11 en ESP32");
+  Serial.println("\n--- Estación Meteorológica Física Iniciada (DHT11) ---");
 
-  // Inicia el sensor
+  // Inicia I2C (SDA=21, SCL=22)
+  Wire.begin(21, 22); 
+  
+  // Inicia Sensor DHT
   dht.begin();
+  
+  // Inicia Sensor BH1750 FÍSICO
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+    Serial.println(F("BH1750 físico OK!"));
+  } else {
+    Serial.println(F("Error al iniciar BH1750"));
+  }
 }
 
+// 4. LOOP: Se ejecuta repetidamente
 void loop() {
-  // Los sensores DHT son lentos. Se recomienda esperar al menos 2 segundos 
-  // entre lecturas para no obtener datos erróneos.
-  delay(2000); 
+  delay(3000); 
 
-  // --- Lectura de Sensores ---
-
-  // Lee la humedad
-  float h = dht.readHumidity();
-  // Lee la temperatura en grados Celsius
+  // --- LECTURA DHT ---
   float t = dht.readTemperature();
-
-  // --- Verificación de Errores ---
+  float h = dht.readHumidity();
   
-  // Comprueba si alguna de las lecturas falló (retorna 'nan' - Not a Number)
-  if (isnan(h) || isnan(t)) {
-    Serial.println("Error al leer el sensor DHT11!");
-    return; // Sal del loop y vuelve a intentarlo
-  }
+  // --- LECTURA MQ-135 ---
+  int airQuality = analogRead(MQ135_PIN);
 
-  // --- Impresión de Datos ---
-  
-  // Si todo salió bien, imprime los valores en el Monitor Serial [cite: 49]
-  Serial.print("Humedad: ");
-  Serial.print(h);
-  Serial.print(" %  |  ");
+  // --- LECTURA BH1750 ---
+  float lux = lightMeter.readLightLevel();
+
+  // --- Manejo de lecturas fallidas ---
+  if (isnan(t)) t = 0.0;
+  if (isnan(h)) h = 0.0;
+  if (lux < 0) lux = 0.0; 
+
+  // --- MOSTRAR EN MONITOR SERIAL ---
+  Serial.println("----------------------------------------");
   Serial.print("Temperatura: ");
-  Serial.print(t);
-  Serial.println(" °C");
+  Serial.print(t, 1); 
+  Serial.println(" *C");
+  
+  Serial.print("Humedad: ");
+  Serial.print(h, 0); 
+  Serial.println(" %");
+
+  Serial.print("Luminosidad: ");
+  Serial.print(lux, 0);
+  Serial.println(" lux");
+
+  Serial.print("Calidad del Aire (Valor Analógico): ");
+  Serial.println(airQuality);
 }
