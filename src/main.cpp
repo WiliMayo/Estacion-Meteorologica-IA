@@ -1,13 +1,12 @@
 /*
- * PROYECTO: ESTACIÓN METEOROLÓGICA (IMPLEMENTACIÓN FÍSICA COMPLETA)
- * Componentes: ESP32, DHT22, BH1750, MQ-135, OLED, LEDs, Ventilador (con TIP122)
- * Autor: Tu Nombre
+ * PROYECTO: ESTACIÓN METEOROLÓGICA
+ * Autores: Guillermo Mero, Luis Cordova, William Mayorga
 */
 
 // 1. LIBRERÍAS
 #include <Arduino.h> // Necesario para PlatformIO
 #include <U8g2lib.h> // Para OLED
-#include <Wire.h>    // Para I2C (OLED y BH1750)
+#include <Wire.h>    // Para I2C (BH1750)
 #include "DHT.h"     // Para Temp/Humedad
 #include <BH1750.h>  // Librería real para el sensor físico
 
@@ -15,28 +14,39 @@
 
 // --- Sensores ---
 #define DHTPIN 4
-#define DHTTYPE DHT11 // Asegúrate que sea DHT22, si es DHT11 cámbialo
+#define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE); 
 
 BH1750 lightMeter; // Objeto de la librería BH1750 real
 
 const int MQ135_PIN = 36; // Pin analógico (VP / SVP)
 
-// --- Pantalla (Asegúrate de que los pines I2C sean 21 y 22) ---
-// SDA=21, SCL=22
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+// --- Pantalla (SPI de 4 hilos) ---
+#define OLED_SCK  18   // Conecta al pin 'SCK' (o SCL) de tu pantalla
+#define OLED_SDA  23   // Conecta al pin 'SDA' (o MOSI) de tu pantalla
+#define OLED_DC   19   // Conecta al pin 'DC' de tu pantalla
+#define OLED_RES  5    // Conecta al pin 'RES' de tu pantalla
+#define OLED_CS   U8X8_PIN_NONE // No usamos Chip Select, es común en estas pantallas
+
+// Constructor de U8G2 para SPI de 4 hilos por Software (SW_SPI)
+U8G2_SSD1306_128X64_NONAME_F_4W_SW_SPI u8g2(U8G2_R0, 
+    /* clock=*/ OLED_SCK, 
+    /* data=*/ OLED_SDA, 
+    /* cs=*/ OLED_CS, 
+    /* dc=*/ OLED_DC, 
+    /* reset=*/ OLED_RES);
 
 // --- Actuadores ---
 const int LED_ROJO_PIN = 14; 
 const int LED_VERDE_PIN = 12; 
 const int LED_AZUL_PIN = 13;  
-const int FAN_PIN = 27;       // Pin que va a la resistencia del TIP122
+const int FAN_PIN = 27;
 
 // --- Umbrales de Temperatura ---
 const float TEMP_CALIDA = 30.0;
 const float TEMP_FRIA = 18.0;
 
-// 3. PROTOTIPOS DE FUNCIONES (Buena práctica en C++)
+// 3. PROTOTIPOS DE FUNCIONES
 void controlarActuadores(float temperatura);
 void actualizarOLED(float t, float h, float lux, int airQuality);
 void imprimirSerial(float t, float h, float lux, int airQuality);
@@ -99,15 +109,14 @@ void loop() {
   // --- MOSTRAR EN PANTALLA OLED ---
   actualizarOLED(t, h, lux, airQuality);
   
-  // --- MOSTRAR EN MONITOR SERIAL ---
-  imprimirSerial(t, h, lux, airQuality);
+  // --- MOSTRAR EN MONITOR SERIAL (Para debug) ---
+  //imprimirSerial(t, h, lux, airQuality);
 }
 
 // --- Implementación de Funciones Auxiliares ---
 
 /**
  * Controla los LEDs y el ventilador basado en la temperatura.
- * La lógica del ventilador es ACTIVE HIGH (HIGH = ON) para el transistor.
  */
 void controlarActuadores(float temperatura) {
   // Resetea todos los LEDs
@@ -118,15 +127,15 @@ void controlarActuadores(float temperatura) {
   if (temperatura > TEMP_CALIDA) {
     // CALIENTE
     digitalWrite(LED_ROJO_PIN, HIGH);
-    digitalWrite(FAN_PIN, HIGH);     // ENCIENDE el ventilador
+    digitalWrite(FAN_PIN, HIGH);
   } else if (temperatura < TEMP_FRIA) {
     // FRÍO
     digitalWrite(LED_AZUL_PIN, HIGH);
-    digitalWrite(FAN_PIN, LOW);      // APAGA el ventilador
+    digitalWrite(FAN_PIN, LOW);
   } else {
     // NORMAL
     digitalWrite(LED_VERDE_PIN, HIGH); 
-    digitalWrite(FAN_PIN, LOW);      // APAGA el ventilador
+    digitalWrite(FAN_PIN, LOW);
   }
 }
 
@@ -138,7 +147,7 @@ void actualizarOLED(float t, float h, float lux, int airQuality) {
 
   u8g2.clearBuffer(); 
   u8g2.setFont(u8g2_font_profont11_tr); // Una fuente clara y pequeña
-  u8g2.drawStr(0, 10, "ESTACION METEOROLOGICA");
+  u8g2.drawStr(0, 10, "EST. METEOROLOGICA");
 
   u8g2.setFont(u8g2_font_profont12_tr);
   
