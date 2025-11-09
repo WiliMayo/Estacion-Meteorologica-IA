@@ -38,8 +38,8 @@ U8G2_SSD1306_128X64_NONAME_F_4W_SW_SPI u8g2(U8G2_R0,
 
 // --- Actuadores ---
 const int LED_ROJO_PIN = 14; 
-const int LED_VERDE_PIN = 12; 
-const int LED_AZUL_PIN = 13;  
+const int LED_AMARILLO_PIN = 12; 
+const int LED_VERDE_PIN = 13;  
 const int FAN_PIN = 27;
 
 // --- Umbrales de Temperatura ---
@@ -74,14 +74,14 @@ void setup() {
 
   // Configurar Actuadores como SALIDA
   pinMode(LED_ROJO_PIN, OUTPUT);
+  pinMode(LED_AMARILLO_PIN, OUTPUT);
   pinMode(LED_VERDE_PIN, OUTPUT);
-  pinMode(LED_AZUL_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
   
   // Apagar todo al iniciar
   digitalWrite(LED_ROJO_PIN, LOW);
+  digitalWrite(LED_AMARILLO_PIN, LOW);
   digitalWrite(LED_VERDE_PIN, LOW);
-  digitalWrite(LED_AZUL_PIN, LOW);
   digitalWrite(FAN_PIN, LOW); // Lógica Active HIGH (LOW = Apagado)
 
   Serial.println("--- Estación Meteorológica Física Iniciada ---");
@@ -121,8 +121,8 @@ void loop() {
 void controlarActuadores(float temperatura) {
   // Resetea todos los LEDs
   digitalWrite(LED_ROJO_PIN, LOW);
+  digitalWrite(LED_AMARILLO_PIN, LOW);
   digitalWrite(LED_VERDE_PIN, LOW);
-  digitalWrite(LED_AZUL_PIN, LOW);
 
   if (temperatura > TEMP_CALIDA) {
     // CALIENTE
@@ -130,11 +130,11 @@ void controlarActuadores(float temperatura) {
     digitalWrite(FAN_PIN, HIGH);
   } else if (temperatura < TEMP_FRIA) {
     // FRÍO
-    digitalWrite(LED_AZUL_PIN, HIGH);
+    digitalWrite(LED_VERDE_PIN, HIGH);
     digitalWrite(FAN_PIN, LOW);
   } else {
     // NORMAL
-    digitalWrite(LED_VERDE_PIN, HIGH); 
+    digitalWrite(LED_AMARILLO_PIN, HIGH); 
     digitalWrite(FAN_PIN, LOW);
   }
 }
