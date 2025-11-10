@@ -34,6 +34,12 @@ Incluye sensores para:
 
 ---
 
+## 🖼️ Diagrama de bloques
+
+![Diagrama de bloques](./img/bloques.png)
+
+---
+
 ## 🧩 Configuración del Proyecto (PlatformIO)
 
 Archivo `platformio.ini`:
