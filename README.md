@@ -28,13 +28,19 @@ Incluye sensores para:
 
 ---
 
+## 💵 Costo de los componentes
+
+![Tabla de costos](./img/costos.png)
+
+---
+
 ## 🔌 Esquema de Conexiones
 
 ![Diagrama esquematico](./img/esquematico.jpg)
 
 ---
 
-## 🖼️ Diagrama de bloques
+## 🔀 Diagrama de bloques
 
 ![Diagrama de bloques](./img/bloques.png)
 
