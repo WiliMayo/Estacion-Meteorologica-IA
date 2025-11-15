@@ -1,63 +1,84 @@
 /*
- * PROYECTO: ESTACIÓN METEOROLÓGICA INTELIGENTE
+ * PROYECTO: ESTACIÓN METEOROLÓGICA INTELIGENTE CON GEMINI AI
  * Autores: Guillermo Mero, Luis Cordova, William Mayorga
+ *
+ * Integración de WiFi Manager, Sensores, Actuadores y API de Google Gemini
 */
 
 // 1. LIBRERÍAS
 #include <Arduino.h>
-#include <U8g2lib.h>
-#include <Wire.h> 
-#include "DHT.h" 
-#include <BH1750.h>
-#include "wifi_manager.h"
+#include <U8g2lib.h>          // Para OLED
+#include <Wire.h>             // Para I2C (BH1750)
+#include "DHT.h"              // Para Temp/Humedad
+#include <BH1750.h>           // Para Sensor de Luz
+#include "wifi_manager.h"     // Nuestro administrador de WiFi
+#include <HTTPClient.h>       // Para hacer llamadas a la API
+#include <ArduinoJson.h>      // Para construir y leer datos de la API
+#include "secrets.h"          // Nuestro archivo con la clave de API
 
-// ... (Todas tus definiciones de pines y objetos (DHT, BH1750, OLED, LEDs) NO CAMBIAN) ...
-// (Asegúrate de que esta sección esté completa)
+// 2. DEFINICIONES GLOBALES
+
 // --- Sensores ---
 #define DHTPIN 4
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE); 
 BH1750 lightMeter; 
-const int MQ135_PIN = 36;
-// --- Pantalla (SPI) ---
+const int MQ135_PIN = 36; // Pin analógico (VP / SVP)
+
+// --- Pantalla (SPI de 4 hilos) ---
 #define OLED_SCK  18
 #define OLED_SDA  23
 #define OLED_DC   19
 #define OLED_RES  5
 #define OLED_CS   U8X8_PIN_NONE 
-U8G2_SSD1306_128X64_NONAME_F_4W_SW_SPI u8g2(U8G2_R0, OLED_SCK, OLED_SDA, OLED_CS, OLED_DC, OLED_RES);
+U8G2_SSD1306_128X64_NONAME_F_4W_SW_SPI u8g2(U8G2_R0, 
+    /* clock=*/ OLED_SCK, 
+    /* data=*/ OLED_SDA, 
+    /* cs=*/ OLED_CS, 
+    /* dc=*/ OLED_DC, 
+    /* reset=*/ OLED_RES);
+
 // --- Actuadores ---
 const int LED_ROJO_PIN = 14; 
 const int LED_VERDE_PIN = 12; 
 const int LED_AZUL_PIN = 13;  
-const int FAN_PIN = 27;
-// --- Umbrales ---
+const int FAN_PIN = 27;       // Pin que va a la resistencia del TIP122
+
+// --- Umbrales de Temperatura ---
 const float TEMP_CALIDA = 30.0;
 const float TEMP_FRIA = 18.0;
 
-
-// --- Timers (para no usar delay()) ---
+// --- Configuración de API y Timers ---
+// URL de la API de Gemini (modelo gemini-pro)
+const String GEMINI_API_URL = "https://generative-ai.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + String(API_KEY);
+const long INTERVALO_SENSORES = 3000;    // Lee sensores y actúa cada 3 seg
+const long INTERVALO_GEMINI = 30000;   // Llama a Gemini cada 30 seg
 unsigned long tiempoAnteriorSensores = 0;
-const long INTERVALO_SENSORES = 3000; // 3 segundos
+unsigned long tiempoAnteriorGemini = 0;
 
 // 3. PROTOTIPOS DE FUNCIONES
 void controlarActuadores(float temperatura);
-void actualizarOLED(float t, float h, float lux, int airQuality);
+void actualizarOLED_Sensores(float t, float h, float lux, int airQuality);
 void imprimirSerial(float t, float h, float lux, int airQuality);
-void actualizarOLED_AP_Mode(); // ¡Nueva función para el OLED!
-
+void actualizarOLED_AP_Mode();
+String llamarAGemini(float t, float h, float lux, int airQuality);
+void actualizarOLED_RespuestaIA(String texto);
 
 // 4. SETUP
 void setup() {
   Serial.begin(115200);
-  Serial.println("--- Estacion Meteorologica Iniciando ---");
+  Serial.println("--- Estacion Meteorologica Inteligente con Gemini ---");
 
-  // Inicia I2C (SDA=21, SCL=22)
+  // Inicia I2C (SDA=21, SCL=22) para el BH1750
   Wire.begin(21, 22); 
   
   // Inicia Sensores
   dht.begin();
-  lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+    Serial.println(F("BH1750 físico OK!"));
+  } else {
+    Serial.println(F("Error al iniciar BH1750"));
+  }
   
   // Inicia Pantalla OLED
   u8g2.begin();
@@ -72,10 +93,10 @@ void setup() {
   digitalWrite(LED_ROJO_PIN, LOW);
   digitalWrite(LED_VERDE_PIN, LOW);
   digitalWrite(LED_AZUL_PIN, LOW);
-  digitalWrite(FAN_PIN, LOW);
+  digitalWrite(FAN_PIN, LOW); // Lógica Active HIGH (LOW = Apagado)
 
   // --- INICIO DE LA LÓGICA WIFI ---
-  EEPROM.begin(512); // Inicializa EEPROM
+  EEPROM.begin(512); // Inicializa EEPROM (512 bytes)
 
   if (!lastRed()) { // Intenta conectar con redes guardadas
       // Si falla, inicia el modo Access Point
@@ -85,53 +106,208 @@ void setup() {
   }
 }
 
-// 5. LOOP (¡EL NUEVO LOOP INTELIGENTE!)
+// 5. LOOP PRINCIPAL
 void loop() {
-  // Comprueba el estado del WiFi en CADA ciclo
+  unsigned long tiempoActual = millis();
+
+  // --- MODO 1: CONFIGURACIÓN WIFI ---
+  // Si se pierde la conexión o no se conectó al inicio...
   if (WiFi.status() != WL_CONNECTED) {
-    // MODO "CONFIGURACIÓN WIFI"
-    // El WiFi no está (o se perdió). Ejecuta el servidor de AP.
-    loopAP(); 
+    loopAP(); // Ejecuta el servidor web del portal cautivo
+    actualizarOLED_AP_Mode(); // Muestra instrucciones en OLED
     
-    // Muestra instrucciones en la pantalla OLED
-    actualizarOLED_AP_Mode();
-    
-    // Apaga los actuadores por seguridad
+    // Apaga actuadores por seguridad
     digitalWrite(FAN_PIN, LOW);
     digitalWrite(LED_ROJO_PIN, LOW);
     digitalWrite(LED_VERDE_PIN, LOW);
     digitalWrite(LED_AZUL_PIN, LOW);
 
+  // --- MODO 2: OPERACIÓN NORMAL (CONECTADO) ---
   } else {
-    // MODO "ESTACIÓN METEOROLÓGICA"
-    // El WiFi está OK. Ejecuta la lógica normal.
-
-    unsigned long tiempoActual = millis();
-
-    // Lógica sin delay() para que el loop no se bloquee
+    
+    // Tarea 1: Leer Sensores y Actuar (Cada 3 segundos)
     if (tiempoActual - tiempoAnteriorSensores >= INTERVALO_SENSORES) {
       tiempoAnteriorSensores = tiempoActual;
 
+      // Realizar lecturas
       float t = dht.readTemperature();
       float h = dht.readHumidity();
       int airQuality = analogRead(MQ135_PIN);
       float lux = lightMeter.readLightLevel();
 
+      // Validar lecturas
       if (isnan(t)) t = 0.0;
       if (isnan(h)) h = 0.0;
       if (lux < 0) lux = 0.0; 
 
+      // Lógica de control físico (¡respuesta rápida!)
       controlarActuadores(t);
-      actualizarOLED(t, h, lux, airQuality);
-      //imprimirSerial(t, h, lux, airQuality); // Descomenta si necesitas debug
+
+      // Mostrar pantalla de sensores
+      actualizarOLED_Sensores(t, h, lux, airQuality);
+      
+      //imprimirSerial(t, h, lux, airQuality); // Descomentar para debug
     }
 
-    // (Aquí es donde pondremos la lógica de IA en el futuro)
-    // if (tiempoActual - tiempoAnteriorGemini >= INTERVALO_GEMINI) { ... }
+    // Tarea 2: Llamar a Gemini (Cada 30 segundos)
+    if (tiempoActual - tiempoAnteriorGemini >= INTERVALO_GEMINI) {
+      tiempoAnteriorGemini = tiempoActual;
+
+      Serial.println("\n[GEMINI] Solicitando análisis de IA...");
+
+      // Obtenemos los datos más recientes
+      float t = dht.readTemperature();
+      float h = dht.readHumidity();
+      int airQuality = analogRead(MQ135_PIN);
+      float lux = lightMeter.readLightLevel();
+
+      if (isnan(t)) t = 0.0; if (isnan(h)) h = 0.0; if (lux < 0) lux = 0.0; 
+
+      // Pantalla en modo "Cargando"
+      u8g2.clearBuffer();
+      u8g2.setFont(u8g2_font_profont12_tr);
+      u8g2.drawStr(20, 32, "Analizando...");
+      u8g2.sendBuffer();
+
+      // Llamar a la API (¡esto es lento!)
+      String respuestaIA = llamarAGemini(t, h, lux, airQuality);
+      
+      Serial.println("[GEMINI] Respuesta recibida:");
+      Serial.println(respuestaIA);
+
+      // Mostrar respuesta en la OLED
+      actualizarOLED_RespuestaIA(respuestaIA);
+      
+      // Esperar 5 segundos mostrando la respuesta
+      delay(5000);
+      
+      // El loop volverá a la pantalla de sensores en el próximo ciclo de 3 seg
+    }
   }
 }
 
 // --- Implementación de Funciones Auxiliares ---
+
+/**
+ * Llama a la API de Gemini y retorna la respuesta.
+ */
+String llamarAGemini(float t, float h, float lux, int airQuality) {
+  // 1. Crear el Prompt (La pregunta a la IA)
+  // Este es el "cerebro" de tu IA. ¡Ajústalo como quieras!
+  String prompt = "Eres un asistente de estación meteorológica. Los datos actuales son: " + 
+                  String(t, 1) + "°C, " + String(h, 0) + "% de humedad, " + String(lux, 0) + 
+                  " lux, y calidad de aire (raw) de " + String(airQuality) + 
+                  ". Dame una recomendación corta (máx 15 palabras) para el usuario. " +
+                  "Ejemplo: 'Cálido y seco. Bebe agua.'";
+
+  // 2. Crear el cuerpo JSON de la solicitud
+  StaticJsonDocument<512> jsonReq; // Tamaño para la solicitud
+  JsonObject contents = jsonReq.createNestedObject("contents");
+  JsonArray parts = contents.createNestedArray("parts");
+  JsonObject textPart = parts.createNestedObject();
+  textPart["text"] = prompt;
+
+  String payload;
+  serializeJson(jsonReq, payload);
+  // Serial.println("Payload: " + payload); // Para debug
+
+  // 3. Hacer la llamada HTTP
+  HTTPClient http;
+  http.begin(GEMINI_API_URL);
+  http.addHeader("Content-Type", "application/json");
+
+  int httpCode = http.POST(payload);
+
+  if (httpCode > 0) {
+    String respuesta = http.getString();
+    // Serial.println("Respuesta cruda: " + respuesta); // Para debug
+
+    // 4. Parsear la respuesta JSON
+    StaticJsonDocument<1024> jsonResp; // Tamaño mayor para la respuesta
+    DeserializationError error = deserializeJson(jsonResp, respuesta);
+
+    if (error) {
+      Serial.print(F("Error al parsear JSON de respuesta: "));
+      Serial.println(error.c_str());
+      return "Error: JSON";
+    }
+
+    // Navegar la estructura compleja de la respuesta de Gemini
+    if (jsonResp.containsKey("candidates") && 
+        jsonResp["candidates"][0].containsKey("content") && 
+        jsonResp["candidates"][0]["content"].containsKey("parts") && 
+        jsonResp["candidates"][0]["content"]["parts"][0].containsKey("text")) {
+          
+      String textoRespuesta = jsonResp["candidates"][0]["content"]["parts"][0]["text"];
+      textoRespuesta.replace("\n", " "); // Quitar saltos de línea
+      return textoRespuesta;
+    } else {
+      Serial.println("Error: Estructura JSON no esperada.");
+      return "Error: IA";
+    }
+
+  } else {
+    Serial.printf("Error en llamada HTTP: %s\n", http.errorToString(httpCode).c_str());
+    return "Error: HTTP";
+  }
+
+  http.end();
+  return "Error";
+}
+
+/**
+ * Muestra la respuesta de Gemini en la OLED,
+ * manejando el salto de línea.
+ */
+void actualizarOLED_RespuestaIA(String texto) {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_profont11_tr); 
+  u8g2.drawStr(0, 10, "RECOMENDACION IA:");
+  
+  // Lógica simple para cortar el texto en líneas
+  int maxCharsPorLinea = 21; // 128px / (ancho aprox_letra 6px)
+  String linea1 = texto;
+  String linea2 = "";
+  String linea3 = "";
+
+  if (texto.length() > maxCharsPorLinea) {
+    // Busca un espacio para cortar limpiamente
+    int corte1 = -1;
+    for (int i = maxCharsPorLinea; i > 0; i--) {
+        if (texto.charAt(i) == ' ') {
+            corte1 = i;
+            break;
+        }
+    }
+    if (corte1 == -1) corte1 = maxCharsPorLinea; // Corta la palabra si no hay espacio
+
+    linea1 = texto.substring(0, corte1);
+    String resto = texto.substring(corte1 + 1); // +1 para saltar el espacio
+
+    if (resto.length() > maxCharsPorLinea) {
+        int corte2 = -1;
+        for (int i = maxCharsPorLinea; i > 0; i--) {
+            if (resto.charAt(i) == ' ') {
+                corte2 = i;
+                break;
+            }
+        }
+        if (corte2 == -1) corte2 = maxCharsPorLinea;
+
+        linea2 = resto.substring(0, corte2);
+        linea3 = resto.substring(corte2 + 1);
+    } else {
+        linea2 = resto;
+    }
+  }
+  
+  u8g2.setFont(u8g2_font_profont12_tr);
+  u8g2.drawStr(0, 26, linea1.c_str());
+  u8g2.drawStr(0, 42, linea2.c_str());
+  u8g2.drawStr(0, 58, linea3.c_str());
+  
+  u8g2.sendBuffer();
+}
 
 /**
  * Muestra las instrucciones del modo AP en el OLED.
@@ -149,14 +325,9 @@ void actualizarOLED_AP_Mode() {
     u8g2.sendBuffer(); 
 }
 
-
-// ... (Pega aquí tus funciones originales SIN CAMBIOS) ...
-/*
-void controlarActuadores(float temperatura) { ... }
-void actualizarOLED(float t, float h, float lux, int airQuality) { ... }
-void imprimirSerial(float t, float h, float lux, int airQuality) { ... }
-*/
-
+/**
+ * Controla los LEDs y el ventilador basado en la temperatura.
+ */
 void controlarActuadores(float temperatura) {
   // Resetea todos los LEDs
   digitalWrite(LED_ROJO_PIN, LOW);
@@ -178,7 +349,10 @@ void controlarActuadores(float temperatura) {
   }
 }
 
-void actualizarOLED(float t, float h, float lux, int airQuality) {
+/**
+ * Actualiza la pantalla OLED con los valores de los sensores.
+ */
+void actualizarOLED_Sensores(float t, float h, float lux, int airQuality) {
   char buffer[32]; // Un buffer para formatear texto
 
   u8g2.clearBuffer(); 
@@ -204,6 +378,9 @@ void actualizarOLED(float t, float h, float lux, int airQuality) {
   u8g2.sendBuffer(); 
 }
 
+/**
+ * Imprime los valores de los sensores al Monitor Serial.
+ */
 void imprimirSerial(float t, float h, float lux, int airQuality) {
   Serial.println("---------------------------------");
   Serial.print("Temperatura: "); Serial.print(t, 1); Serial.println(" *C");
