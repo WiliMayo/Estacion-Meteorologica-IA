@@ -50,7 +50,7 @@ const float TEMP_FRIA = 18.0;
 
 // --- Configuración de API y Timers ---
 // URL de la API de Gemini (modelo gemini-pro)
-const String GEMINI_API_URL = "https://generative-ai.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + String(API_KEY);
+const String GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=" + String(API_KEY);
 const long INTERVALO_SENSORES = 3000;    // Lee sensores y actúa cada 3 seg
 const long INTERVALO_GEMINI = 30000;   // Llama a Gemini cada 30 seg
 unsigned long tiempoAnteriorSensores = 0;
@@ -190,69 +190,75 @@ void loop() {
 
 /**
  * Llama a la API de Gemini y retorna la respuesta.
- * --- ¡VERSIÓN ACTUALIZADA CON SINTAXIS ArduinoJson v7! ---
+ * --- ¡VERSIÓN DE DEPURACIÓN MEJORADA! ---
  */
 String llamarAGemini(float t, float h, float lux, int airQuality) {
-  // 1. Crear el Prompt (La pregunta a la IA)
+  // 1. Crear el Prompt
   String prompt = "Eres un asistente de estación meteorológica. Los datos actuales son: " + 
                   String(t, 1) + "°C, " + String(h, 0) + "% de humedad, " + String(lux, 0) + 
                   " lux, y calidad de aire (raw) de " + String(airQuality) + 
                   ". Dame una recomendación corta (máx 15 palabras) para el usuario. " +
                   "Ejemplo: 'Cálido y seco. Bebe agua.'";
 
-  // 2. Crear el cuerpo JSON de la solicitud (¡Sintaxis v7!)
-  // JsonDocument (en lugar de StaticJsonDocument) se usa en v7
+  // 2. Crear el cuerpo JSON (Sintaxis v7)
   JsonDocument jsonReq; 
-  
-  // La nueva sintaxis es más limpia:
   JsonObject contents = jsonReq["contents"].to<JsonObject>();
   JsonArray parts = contents["parts"].to<JsonArray>();
-  JsonObject textPart = parts.add<JsonObject>(); // .add() en lugar de .createNestedObject()
+  JsonObject textPart = parts.add<JsonObject>();
   textPart["text"] = prompt;
 
   String payload;
   serializeJson(jsonReq, payload);
+  Serial.println("[HTTP] Enviando payload: " + payload); // DEBUG
 
   // 3. Hacer la llamada HTTP
   HTTPClient http;
   http.begin(GEMINI_API_URL);
   http.addHeader("Content-Type", "application/json");
+  http.setTimeout(15000);
 
   int httpCode = http.POST(payload);
 
-  if (httpCode > 0) {
-    String respuesta = http.getString();
+  // --- ¡NUEVA SECCIÓN DE DEPURACIÓN! ---
+  Serial.printf("[HTTP] Código de respuesta: %d\n", httpCode);
 
-    // 4. Parsear la respuesta JSON (¡Sintaxis v7!)
-    JsonDocument jsonResp; // Usamos JsonDocument
+  // Solo si la respuesta es 200 (OK), intentamos parsear
+  if (httpCode == 200) { 
+    String respuesta = http.getString();
+    Serial.println("[HTTP] Respuesta cruda (JSON esperado):");
+    Serial.println(respuesta); // ¡Imprime la respuesta real!
+
+    // 4. Parsear la respuesta JSON (Sintaxis v7)
+    JsonDocument jsonResp;
     DeserializationError error = deserializeJson(jsonResp, respuesta);
 
     if (error) {
-      Serial.print(F("Error al parsear JSON de respuesta: "));
+      Serial.print(F("[JSON] Error al parsear JSON de respuesta: "));
       Serial.println(error.c_str());
-      return "Error: JSON";
+      return "Error: JSON"; // Esto es lo que estás viendo
     }
 
-    // Navegar la estructura de respuesta (¡Sintaxis v7!)
-    // Esta forma es más robusta y simple que el .containsKey() múltiple.
-    // Intenta obtener el valor directamente.
+    // Navegar la estructura de respuesta (Sintaxis v7)
     JsonVariant textVariant = jsonResp["candidates"][0]["content"]["parts"][0]["text"];
 
     if (!textVariant.isNull()) {
       // ¡Éxito!
       String textoRespuesta = textVariant.as<String>();
-      textoRespuesta.replace("\n", " "); // Quitar saltos de línea
+      textoRespuesta.replace("\n", " "); 
       return textoRespuesta;
     } else {
-      // El JSON no tenía la estructura que esperábamos
-      Serial.println("Error: Estructura JSON no esperada.");
-      Serial.println("Respuesta cruda: " + respuesta); // Imprime la respuesta para debug
+      Serial.println("[JSON] Error: Estructura JSON no esperada.");
       return "Error: IA";
     }
 
   } else {
-    Serial.printf("Error en llamada HTTP: %s\n", http.errorToString(httpCode).c_str());
-    return "Error: HTTP";
+    // Si el código no es 200 (ej. 403, 404, 500)
+    Serial.printf("[HTTP] Error en llamada: %s\n", http.errorToString(httpCode).c_str());
+    String respuestaError = http.getString(); // Intenta obtener el cuerpo del error
+    Serial.println("[HTTP] Cuerpo del error (HTML?):");
+    Serial.println(respuestaError);
+    http.end();
+    return "Error HTTP " + String(httpCode); // Retorna el código de error
   }
 
   http.end();
