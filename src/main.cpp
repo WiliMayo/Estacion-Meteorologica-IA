@@ -190,26 +190,28 @@ void loop() {
 
 /**
  * Llama a la API de Gemini y retorna la respuesta.
+ * --- ¡VERSIÓN ACTUALIZADA CON SINTAXIS ArduinoJson v7! ---
  */
 String llamarAGemini(float t, float h, float lux, int airQuality) {
   // 1. Crear el Prompt (La pregunta a la IA)
-  // Este es el "cerebro" de tu IA. ¡Ajústalo como quieras!
   String prompt = "Eres un asistente de estación meteorológica. Los datos actuales son: " + 
                   String(t, 1) + "°C, " + String(h, 0) + "% de humedad, " + String(lux, 0) + 
                   " lux, y calidad de aire (raw) de " + String(airQuality) + 
                   ". Dame una recomendación corta (máx 15 palabras) para el usuario. " +
                   "Ejemplo: 'Cálido y seco. Bebe agua.'";
 
-  // 2. Crear el cuerpo JSON de la solicitud
-  StaticJsonDocument<512> jsonReq; // Tamaño para la solicitud
-  JsonObject contents = jsonReq.createNestedObject("contents");
-  JsonArray parts = contents.createNestedArray("parts");
-  JsonObject textPart = parts.createNestedObject();
+  // 2. Crear el cuerpo JSON de la solicitud (¡Sintaxis v7!)
+  // JsonDocument (en lugar de StaticJsonDocument) se usa en v7
+  JsonDocument jsonReq; 
+  
+  // La nueva sintaxis es más limpia:
+  JsonObject contents = jsonReq["contents"].to<JsonObject>();
+  JsonArray parts = contents["parts"].to<JsonArray>();
+  JsonObject textPart = parts.add<JsonObject>(); // .add() en lugar de .createNestedObject()
   textPart["text"] = prompt;
 
   String payload;
   serializeJson(jsonReq, payload);
-  // Serial.println("Payload: " + payload); // Para debug
 
   // 3. Hacer la llamada HTTP
   HTTPClient http;
@@ -220,10 +222,9 @@ String llamarAGemini(float t, float h, float lux, int airQuality) {
 
   if (httpCode > 0) {
     String respuesta = http.getString();
-    // Serial.println("Respuesta cruda: " + respuesta); // Para debug
 
-    // 4. Parsear la respuesta JSON
-    StaticJsonDocument<1024> jsonResp; // Tamaño mayor para la respuesta
+    // 4. Parsear la respuesta JSON (¡Sintaxis v7!)
+    JsonDocument jsonResp; // Usamos JsonDocument
     DeserializationError error = deserializeJson(jsonResp, respuesta);
 
     if (error) {
@@ -232,17 +233,20 @@ String llamarAGemini(float t, float h, float lux, int airQuality) {
       return "Error: JSON";
     }
 
-    // Navegar la estructura compleja de la respuesta de Gemini
-    if (jsonResp.containsKey("candidates") && 
-        jsonResp["candidates"][0].containsKey("content") && 
-        jsonResp["candidates"][0]["content"].containsKey("parts") && 
-        jsonResp["candidates"][0]["content"]["parts"][0].containsKey("text")) {
-          
-      String textoRespuesta = jsonResp["candidates"][0]["content"]["parts"][0]["text"];
+    // Navegar la estructura de respuesta (¡Sintaxis v7!)
+    // Esta forma es más robusta y simple que el .containsKey() múltiple.
+    // Intenta obtener el valor directamente.
+    JsonVariant textVariant = jsonResp["candidates"][0]["content"]["parts"][0]["text"];
+
+    if (!textVariant.isNull()) {
+      // ¡Éxito!
+      String textoRespuesta = textVariant.as<String>();
       textoRespuesta.replace("\n", " "); // Quitar saltos de línea
       return textoRespuesta;
     } else {
+      // El JSON no tenía la estructura que esperábamos
       Serial.println("Error: Estructura JSON no esperada.");
+      Serial.println("Respuesta cruda: " + respuesta); // Imprime la respuesta para debug
       return "Error: IA";
     }
 
