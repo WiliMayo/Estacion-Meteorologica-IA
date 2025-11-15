@@ -1,128 +1,167 @@
 /*
- * PROYECTO: ESTACIÓN METEOROLÓGICA
+ * PROYECTO: ESTACIÓN METEOROLÓGICA INTELIGENTE
  * Autores: Guillermo Mero, Luis Cordova, William Mayorga
 */
 
 // 1. LIBRERÍAS
-#include <Arduino.h> // Necesario para PlatformIO
-#include <U8g2lib.h> // Para OLED
-#include <Wire.h>    // Para I2C (BH1750)
-#include "DHT.h"     // Para Temp/Humedad
-#include <BH1750.h>  // Librería real para el sensor físico
+#include <Arduino.h>
+#include <U8g2lib.h>
+#include <Wire.h> 
+#include "DHT.h" 
+#include <BH1750.h>
+#include "wifi_manager.h"
 
-// 2. DEFINICIONES GLOBALES
-
+// ... (Todas tus definiciones de pines y objetos (DHT, BH1750, OLED, LEDs) NO CAMBIAN) ...
+// (Asegúrate de que esta sección esté completa)
 // --- Sensores ---
 #define DHTPIN 4
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE); 
-
-BH1750 lightMeter; // Objeto de la librería BH1750 real
-
-const int MQ135_PIN = 36; // Pin analógico (VP / SVP)
-
-// --- Pantalla (SPI de 4 hilos) ---
-#define OLED_SCK  18   // Conecta al pin 'SCK' (o SCL) de tu pantalla
-#define OLED_SDA  23   // Conecta al pin 'SDA' (o MOSI) de tu pantalla
-#define OLED_DC   19   // Conecta al pin 'DC' de tu pantalla
-#define OLED_RES  5    // Conecta al pin 'RES' de tu pantalla
-#define OLED_CS   U8X8_PIN_NONE // No usamos Chip Select, es común en estas pantallas
-
-// Constructor de U8G2 para SPI de 4 hilos por Software (SW_SPI)
-U8G2_SSD1306_128X64_NONAME_F_4W_SW_SPI u8g2(U8G2_R0, 
-    /* clock=*/ OLED_SCK, 
-    /* data=*/ OLED_SDA, 
-    /* cs=*/ OLED_CS, 
-    /* dc=*/ OLED_DC, 
-    /* reset=*/ OLED_RES);
-
+BH1750 lightMeter; 
+const int MQ135_PIN = 36;
+// --- Pantalla (SPI) ---
+#define OLED_SCK  18
+#define OLED_SDA  23
+#define OLED_DC   19
+#define OLED_RES  5
+#define OLED_CS   U8X8_PIN_NONE 
+U8G2_SSD1306_128X64_NONAME_F_4W_SW_SPI u8g2(U8G2_R0, OLED_SCK, OLED_SDA, OLED_CS, OLED_DC, OLED_RES);
 // --- Actuadores ---
 const int LED_ROJO_PIN = 14; 
-const int LED_AMARILLO_PIN = 12; 
-const int LED_VERDE_PIN = 13;  
+const int LED_VERDE_PIN = 12; 
+const int LED_AZUL_PIN = 13;  
 const int FAN_PIN = 27;
-
-// --- Umbrales de Temperatura ---
+// --- Umbrales ---
 const float TEMP_CALIDA = 30.0;
 const float TEMP_FRIA = 18.0;
+
+
+// --- Timers (para no usar delay()) ---
+unsigned long tiempoAnteriorSensores = 0;
+const long INTERVALO_SENSORES = 3000; // 3 segundos
 
 // 3. PROTOTIPOS DE FUNCIONES
 void controlarActuadores(float temperatura);
 void actualizarOLED(float t, float h, float lux, int airQuality);
 void imprimirSerial(float t, float h, float lux, int airQuality);
+void actualizarOLED_AP_Mode(); // ¡Nueva función para el OLED!
 
 
 // 4. SETUP
 void setup() {
   Serial.begin(115200);
+  Serial.println("--- Estacion Meteorologica Iniciando ---");
 
   // Inicia I2C (SDA=21, SCL=22)
   Wire.begin(21, 22); 
   
-  // Inicia Sensor DHT
+  // Inicia Sensores
   dht.begin();
+  lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
   
   // Inicia Pantalla OLED
   u8g2.begin();
 
-  // Inicia Sensor BH1750
-  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
-    Serial.println(F("BH1750 físico OK!"));
-  } else {
-    Serial.println(F("Error al iniciar BH1750"));
-  }
-
   // Configurar Actuadores como SALIDA
   pinMode(LED_ROJO_PIN, OUTPUT);
-  pinMode(LED_AMARILLO_PIN, OUTPUT);
   pinMode(LED_VERDE_PIN, OUTPUT);
+  pinMode(LED_AZUL_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
   
   // Apagar todo al iniciar
   digitalWrite(LED_ROJO_PIN, LOW);
-  digitalWrite(LED_AMARILLO_PIN, LOW);
   digitalWrite(LED_VERDE_PIN, LOW);
-  digitalWrite(FAN_PIN, LOW); // Lógica Active HIGH (LOW = Apagado)
+  digitalWrite(LED_AZUL_PIN, LOW);
+  digitalWrite(FAN_PIN, LOW);
 
-  Serial.println("--- Estación Meteorológica Física Iniciada ---");
+  // --- INICIO DE LA LÓGICA WIFI ---
+  EEPROM.begin(512); // Inicializa EEPROM
+
+  if (!lastRed()) { // Intenta conectar con redes guardadas
+      // Si falla, inicia el modo Access Point
+      initAP("EstacionMeteo-Config", "12345678"); 
+  } else {
+      Serial.println("Conexion WiFi exitosa en el arranque.");
+  }
 }
 
-// 5. LOOP
+// 5. LOOP (¡EL NUEVO LOOP INTELIGENTE!)
 void loop() {
-  // Espera 3 segundos entre lecturas
-  delay(3000); 
+  // Comprueba el estado del WiFi en CADA ciclo
+  if (WiFi.status() != WL_CONNECTED) {
+    // MODO "CONFIGURACIÓN WIFI"
+    // El WiFi no está (o se perdió). Ejecuta el servidor de AP.
+    loopAP(); 
+    
+    // Muestra instrucciones en la pantalla OLED
+    actualizarOLED_AP_Mode();
+    
+    // Apaga los actuadores por seguridad
+    digitalWrite(FAN_PIN, LOW);
+    digitalWrite(LED_ROJO_PIN, LOW);
+    digitalWrite(LED_VERDE_PIN, LOW);
+    digitalWrite(LED_AZUL_PIN, LOW);
 
-  // --- LECTURA DE SENSORES ---
-  float t = dht.readTemperature();
-  float h = dht.readHumidity();
-  int airQuality = analogRead(MQ135_PIN);
-  float lux = lightMeter.readLightLevel();
+  } else {
+    // MODO "ESTACIÓN METEOROLÓGICA"
+    // El WiFi está OK. Ejecuta la lógica normal.
 
-  // --- Manejo de lecturas fallidas ---
-  if (isnan(t)) t = 0.0;
-  if (isnan(h)) h = 0.0;
-  if (lux < 0) lux = 0.0; 
+    unsigned long tiempoActual = millis();
 
-  // --- LÓGICA DE CONTROL ---
-  controlarActuadores(t);
+    // Lógica sin delay() para que el loop no se bloquee
+    if (tiempoActual - tiempoAnteriorSensores >= INTERVALO_SENSORES) {
+      tiempoAnteriorSensores = tiempoActual;
 
-  // --- MOSTRAR EN PANTALLA OLED ---
-  actualizarOLED(t, h, lux, airQuality);
-  
-  // --- MOSTRAR EN MONITOR SERIAL (Para debug) ---
-  //imprimirSerial(t, h, lux, airQuality);
+      float t = dht.readTemperature();
+      float h = dht.readHumidity();
+      int airQuality = analogRead(MQ135_PIN);
+      float lux = lightMeter.readLightLevel();
+
+      if (isnan(t)) t = 0.0;
+      if (isnan(h)) h = 0.0;
+      if (lux < 0) lux = 0.0; 
+
+      controlarActuadores(t);
+      actualizarOLED(t, h, lux, airQuality);
+      //imprimirSerial(t, h, lux, airQuality); // Descomenta si necesitas debug
+    }
+
+    // (Aquí es donde pondremos la lógica de IA en el futuro)
+    // if (tiempoActual - tiempoAnteriorGemini >= INTERVALO_GEMINI) { ... }
+  }
 }
 
 // --- Implementación de Funciones Auxiliares ---
 
 /**
- * Controla los LEDs y el ventilador basado en la temperatura.
+ * Muestra las instrucciones del modo AP en el OLED.
  */
+void actualizarOLED_AP_Mode() {
+    u8g2.clearBuffer(); 
+    u8g2.setFont(u8g2_font_profont11_tr); 
+    u8g2.drawStr(0, 10, "MODO CONFIGURACION");
+
+    u8g2.setFont(u8g2_font_profont12_tr);
+    u8g2.drawStr(0, 26, "1. Conectate a la red:");
+    u8g2.drawStr(0, 42, "   'EstacionMeteo-Config'");
+    u8g2.drawStr(0, 58, "2. Ve a 192.168.4.1");
+    
+    u8g2.sendBuffer(); 
+}
+
+
+// ... (Pega aquí tus funciones originales SIN CAMBIOS) ...
+/*
+void controlarActuadores(float temperatura) { ... }
+void actualizarOLED(float t, float h, float lux, int airQuality) { ... }
+void imprimirSerial(float t, float h, float lux, int airQuality) { ... }
+*/
+
 void controlarActuadores(float temperatura) {
   // Resetea todos los LEDs
   digitalWrite(LED_ROJO_PIN, LOW);
-  digitalWrite(LED_AMARILLO_PIN, LOW);
   digitalWrite(LED_VERDE_PIN, LOW);
+  digitalWrite(LED_AZUL_PIN, LOW);
 
   if (temperatura > TEMP_CALIDA) {
     // CALIENTE
@@ -130,18 +169,15 @@ void controlarActuadores(float temperatura) {
     digitalWrite(FAN_PIN, HIGH);
   } else if (temperatura < TEMP_FRIA) {
     // FRÍO
-    digitalWrite(LED_VERDE_PIN, HIGH);
+    digitalWrite(LED_AZUL_PIN, HIGH);
     digitalWrite(FAN_PIN, LOW);
   } else {
     // NORMAL
-    digitalWrite(LED_AMARILLO_PIN, HIGH); 
+    digitalWrite(LED_VERDE_PIN, HIGH); 
     digitalWrite(FAN_PIN, LOW);
   }
 }
 
-/**
- * Actualiza la pantalla OLED con los valores de los sensores.
- */
 void actualizarOLED(float t, float h, float lux, int airQuality) {
   char buffer[32]; // Un buffer para formatear texto
 
@@ -168,9 +204,6 @@ void actualizarOLED(float t, float h, float lux, int airQuality) {
   u8g2.sendBuffer(); 
 }
 
-/**
- * Imprime los valores de los sensores al Monitor Serial.
- */
 void imprimirSerial(float t, float h, float lux, int airQuality) {
   Serial.println("---------------------------------");
   Serial.print("Temperatura: "); Serial.print(t, 1); Serial.println(" *C");
