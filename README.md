@@ -1,6 +1,15 @@
 # 🌡️ Sistema de Monitoreo Ambiental con ESP32
 
-Este proyecto implementa un sistema de monitoreo ambiental utilizando un **ESP32** y varios sensores para medir temperatura, humedad, calidad del aire y luminosidad. Los datos son visualizados en una pantalla OLED SSD1306, y se controla un sistema de ventilación mediante relés.
+Este proyecto implementa un sistema de monitoreo ambiental utilizando un **ESP32** y varios sensores para medir temperatura, humedad, calidad del aire y luminosidad. Los datos son visualizados en una pantalla OLED SSD1306, y se controla un ventilador mediante relé.
+
+Los datos se envían a la API de Gemini (Google AI) , que los analiza y genera recomendaciones prácticas. El sistema reacciona a las condiciones activando actuadores como un ventilador o LEDs.
+
+Imagenes del sistema
+
+![Tabla de costos](./img/sistema.jpg)
+
+
+![Tabla de costos](./img/interfaz.jpg)
 
 ---
 
@@ -70,8 +79,9 @@ monitor_speed = 115200
 ## 🖥️ Funcionamiento
 
 1. El ESP32 lee datos de los sensores conectados.  
-2. Los valores de temperatura, humedad, luminosidad y calidad del aire se muestran en la pantalla OLED.  
-3. Si se superan ciertos umbrales, se activan los relés mediante transistores TIP122.
+2. Los valores de temperatura, humedad, luminosidad y calidad del aire se muestran en la pantalla OLED.
+3. Los datos ambientales se envian a Gemini mediante su api.
+4. Gemini responde con recomendaciones para el usuario e indicaciones para controlar los actuadores del sistema.
 
 ---
 
